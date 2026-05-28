@@ -1,17 +1,17 @@
 {
-  "name": "monitoring-signal-alpha",
-  "version": "1.0.0",
-  "description": "Testnet swap & add liquidity volume bot",
-  "main": "index.js",
+  "name": "helios-volume-bot",
+  "version": "2.0.0",
+  "description": "Testnet volume bot for Helios Trade (AsterSwap) on RISE Chain — swaps + liquidity",
+  "main": "scripts/volumeBot.js",
   "type": "module",
   "scripts": {
-    "start": "node scripts/volumeBot.js",
-    "swap": "node scripts/volumeBot.js --mode swap",
+    "start":     "node scripts/volumeBot.js --mode both",
+    "swap":      "node scripts/volumeBot.js --mode swap",
     "liquidity": "node scripts/volumeBot.js --mode liquidity",
-    "both": "node scripts/volumeBot.js --mode both"
+    "both":      "node scripts/volumeBot.js --mode both"
   },
   "dependencies": {
-    "ethers": "^6.13.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.0"
   }
 }
