@@ -1,0 +1,17 @@
+{
+  "name": "monitoring-signal-alpha",
+  "version": "1.0.0",
+  "description": "Testnet swap & add liquidity volume bot",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/volumeBot.js",
+    "swap": "node scripts/volumeBot.js --mode swap",
+    "liquidity": "node scripts/volumeBot.js --mode liquidity",
+    "both": "node scripts/volumeBot.js --mode both"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0",
+    "dotenv": "^16.4.5"
+  }
+}
