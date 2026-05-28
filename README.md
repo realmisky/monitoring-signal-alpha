@@ -1,6 +1,6 @@
-# 📈 Testnet Volume Bot — Swap & Add Liquidity
+# 📈 RISE Testnet Volume Bot — Helios Trade
 
-Automates testnet trading activity on any **Uniswap V2-compatible DEX** (Uniswap, Sushiswap, Quickswap, etc.) to generate swap volume and liquidity positions.
+Generates swap + liquidity activity on **[Helios Trade](https://testnet.helios.trade)**, a Uniswap V3-compatible DEX running on the **RISE Chain Testnet** (Chain ID: 11155931).
 
 ---
 
@@ -8,22 +8,25 @@ Automates testnet trading activity on any **Uniswap V2-compatible DEX** (Uniswap
 
 | Feature | Details |
 |---|---|
-| 🔄 Swap rounds | ETH → Token → ETH, configurable rounds & amounts |
-| 💧 Add liquidity | Buys tokens then pairs them with ETH in the pool |
-| ⚙️ Configurable | Slippage, delay, rounds, amounts all via `.env` |
+| 🔄 Swap rounds | Wraps ETH → WETH → Token → WETH → ETH, configurable rounds |
+| 💧 Add liquidity | Buys tokens then mints a V3 LP position (wide tick range) |
+| ⚙️ Configurable | Fee tier, slippage, delay, rounds, amounts all via `.env` |
+| ⚡ RISE-native | Uses `testnet.riselabs.xyz` RPC, sub-second confirmations |
 | 🛡️ Safe | Slippage protection, auto-approval, deadline guard |
-| 🌐 Multi-network | Works on any EVM testnet with a V2 router |
 
 ---
 
-## Supported Testnets
+## Network Info
 
-| Network | Chain ID | RPC |
-|---|---|---|
-| Ethereum Sepolia | 11155111 | `https://rpc.sepolia.org` |
-| Polygon Mumbai | 80001 | `https://rpc-mumbai.maticvigil.com` |
-| Arbitrum Sepolia | 421614 | `https://sepolia-rollup.arbitrum.io/rpc` |
-| Base Sepolia | 84532 | `https://sepolia.base.org` |
+| Property | Value |
+|---|---|
+| **Network** | RISE Testnet |
+| **Chain ID** | `11155931` |
+| **RPC** | `https://testnet.riselabs.xyz` |
+| **Explorer** | `https://explorer.testnet.risechain.com` |
+| **Faucet** | `https://faucet.testnet.riselabs.xyz` |
+| **Portal** | `https://portal.risechain.com` |
+| **Helios DEX** | `https://testnet.helios.trade/swap` |
 
 ---
 
@@ -35,46 +38,85 @@ Automates testnet trading activity on any **Uniswap V2-compatible DEX** (Uniswap
 npm install
 ```
 
-### 2. Configure environment
+### 2. Get testnet ETH
+
+Go to the [RISE Testnet Faucet](https://portal.risechain.com) or [backup faucet](https://faucet.testnet.riselabs.xyz) and drip ETH to your wallet.
+
+### 3. Find the Helios contract addresses
+
+1. Go to [testnet.helios.trade/swap](https://testnet.helios.trade/swap)
+2. Connect your wallet and do a small manual swap
+3. Open the transaction in the [RISE Explorer](https://explorer.testnet.risechain.com)
+4. Note the **SwapRouter** contract address (the `to` address of your tx)
+5. For the **Position Manager**, go to the "Add Liquidity" tab on Helios and do the same
+
+### 4. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in:
+Fill in your `.env`:
 
 ```env
 PRIVATE_KEY=0xYOUR_TESTNET_PRIVATE_KEY
-RPC_URL=https://rpc.sepolia.org
-ROUTER_ADDRESS=0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008
-TOKEN_A=0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9   # WETH on Sepolia
-TOKEN_B=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238   # USDC mock on Sepolia
+
+RPC_URL=https://testnet.riselabs.xyz
+
+SWAP_ROUTER=0xHeliosSwapRouterAddress
+POSITION_MANAGER=0xHeliosPositionManagerAddress
+
+WETH_ADDRESS=0xWETHOnRiseTestnet
+TOKEN_ADDRESS=0x50524C5bDa18aE25C600a8b81449B9CeAeB50471   # USDC
 ```
 
-> ⚠️ **Never use a wallet with real funds. Testnet only.**
+> ⚠️ **Never use a real wallet. Testnet only.**
 
-### 3. Get testnet ETH
-
-- Sepolia faucet: https://sepoliafaucet.com
-- Alchemy faucet: https://www.alchemy.com/faucets/ethereum-sepolia
-- Polygon Mumbai faucet: https://faucet.polygon.technology
-
----
-
-## Usage
+### 5. Run
 
 ```bash
-# Run swaps only (ETH → Token → ETH, N rounds)
+# Swaps only (ETH wrap → buy → sell → unwrap, N rounds)
 npm run swap
 
 # Add liquidity only
 npm run liquidity
 
-# Run swaps AND add liquidity (default)
+# Swaps + add liquidity (default)
 npm run both
+```
 
-# Or directly with node
-node scripts/volumeBot.js --mode both
+---
+
+## Known Token Addresses on RISE Testnet
+
+| Token | Address |
+|---|---|
+| USDC | `0x50524C5bDa18aE25C600a8b81449B9CeAeB50471` |
+| USDT | `0x9190159b1bb78482Dca6EBaDf03ab744de0c0197` |
+| BTC  | `0xadDAEd879D549E5DBfaf3e35470C20D8C50fDed0` |
+
+*Source: [docs.risechain.com/docs/builders/testnet-tokens](https://docs.risechain.com/docs/builders/testnet-tokens)*
+
+---
+
+## How It Works
+
+### Swap Round
+```
+ETH
+ └─ wrap ──────────────────► WETH
+ └─ exactInputSingle ──────► TOKEN
+ └─ exactInputSingle ──────► WETH
+ └─ unwrap ────────────────► ETH
+```
+Each round = **2 on-chain swaps** (buy + sell).
+
+### Add Liquidity
+```
+ETH
+ └─ wrap ──────────────────► WETH (full amount)
+ └─ exactInputSingle ──────► TOKEN (half WETH spent)
+ └─ positionManager.mint ──► LP NFT (WETH + TOKEN paired)
 ```
 
 ---
@@ -83,53 +125,18 @@ node scripts/volumeBot.js --mode both
 
 | Variable | Default | Description |
 |---|---|---|
-| `PRIVATE_KEY` | — | Wallet private key (testnet only!) |
-| `RPC_URL` | — | JSON-RPC endpoint for your testnet |
-| `ROUTER_ADDRESS` | — | Uniswap V2-compatible router address |
-| `TOKEN_A` | — | Token A address (usually WETH) |
-| `TOKEN_B` | — | Token B address to trade against |
-| `SWAP_ROUNDS` | `10` | Number of buy/sell swap cycles |
-| `SWAP_AMOUNT_ETH` | `0.001` | ETH per swap round |
-| `DELAY_SECONDS` | `15` | Seconds between each round |
-| `SLIPPAGE_PERCENT` | `5` | Slippage tolerance (%) |
-| `DEADLINE_OFFSET` | `300` | Tx deadline in seconds from now |
-
----
-
-## How It Works
-
-### Swap Round
-```
-ETH ──[swapExactETHForTokens]──► TOKEN_B
-TOKEN_B ──[swapExactTokensForETH]──► ETH
-```
-Each round performs a buy then a sell, generating **2 on-chain swaps** per round.
-
-### Add Liquidity
-```
-ETH/2 ──[swapExactETHForTokens]──► TOKEN_B
-ETH/2 + TOKEN_B ──[addLiquidityETH]──► LP tokens
-```
-Buys tokens with half the configured ETH, then pairs the remaining ETH + tokens into the liquidity pool.
-
----
-
-## Example Output
-
-```
-[2024-01-15T10:00:00.000Z] 🚀  Volume Bot starting  [mode=both]
-[2024-01-15T10:00:01.000Z]     Network : sepolia (chainId=11155111)
-[2024-01-15T10:00:01.000Z]     Address : 0xABC...123
-[2024-01-15T10:00:01.000Z]     Balance : 0.5 ETH
-
-[2024-01-15T10:00:01.000Z] 📊  Running 10 swap rounds  (0.001 ETH each)
-
-[2024-01-15T10:00:01.000Z] ── Swap round 1 ──────────────────────────
-[2024-01-15T10:00:01.000Z] ▶  BUY  0.001 ETH → USDC
-[2024-01-15T10:00:15.000Z]    ✅ BUY confirmed  block=5123456  tx=0xabc...
-[2024-01-15T10:00:18.000Z] ▶  SELL 1.82 USDC → ETH
-[2024-01-15T10:00:32.000Z]    ✅ SELL confirmed  block=5123459  tx=0xdef...
-```
+| `PRIVATE_KEY` | — | Wallet private key |
+| `RPC_URL` | `https://testnet.riselabs.xyz` | RISE testnet RPC |
+| `SWAP_ROUTER` | — | Helios SwapRouter address |
+| `POSITION_MANAGER` | — | Helios PositionManager address |
+| `WETH_ADDRESS` | — | WETH token on RISE testnet |
+| `TOKEN_ADDRESS` | — | Token to swap (e.g. USDC) |
+| `POOL_FEE` | `3000` | 500 / 3000 / 10000 |
+| `SWAP_ROUNDS` | `10` | Number of buy+sell cycles |
+| `SWAP_AMOUNT_ETH` | `0.001` | ETH per round |
+| `DELAY_SECONDS` | `12` | Wait between rounds |
+| `SLIPPAGE_PERCENT` | `5` | Slippage tolerance |
+| `DEADLINE_OFFSET` | `300` | Tx deadline (seconds) |
 
 ---
 
@@ -138,17 +145,17 @@ Buys tokens with half the configured ETH, then pairs the remaining ETH + tokens 
 ```
 monitoring-signal-alpha/
 ├── scripts/
-│   └── volumeBot.js      # Main bot script
-├── .env.example          # Environment variable template
+│   └── volumeBot.js      # Main bot (swap + liquidity)
+├── .env.example          # Config template
+├── .gitignore            # Keeps .env out of git
 ├── package.json
 └── README.md
 ```
 
 ---
 
-## Security Notes
+## Security
 
-- 🔑 Never commit your `.env` file — it contains your private key
-- 🧪 Only use throwaway testnet wallets
-- 💸 Keep testnet ETH amounts small to avoid wasting faucet funds
-- `.env` is already in `.gitignore` by convention — double-check before pushing
+- 🔑 `.env` is gitignored — never commit your private key
+- 🧪 Testnet wallets only — no real value at risk
+- ✅ `amountOutMinimum: 0n` is fine for testnet, increase it for prod use
