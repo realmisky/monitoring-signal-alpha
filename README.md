@@ -1,18 +1,8 @@
-# 📈 RISE Testnet Volume Bot — Helios Trade
+# 🚀 Helios Trade Volume Bot — RISE Testnet
 
-Generates swap + liquidity activity on **[Helios Trade](https://testnet.helios.trade)**, a Uniswap V3-compatible DEX running on the **RISE Chain Testnet** (Chain ID: 11155931).
+Automates swap + liquidity activity on **[Helios Trade (AsterSwap)](https://testnet.helios.trade)**, a Uniswap V2/V3-compatible DEX running on **RISE Chain Testnet**.
 
----
-
-## Features
-
-| Feature | Details |
-|---|---|
-| 🔄 Swap rounds | Wraps ETH → WETH → Token → WETH → ETH, configurable rounds |
-| 💧 Add liquidity | Buys tokens then mints a V3 LP position (wide tick range) |
-| ⚙️ Configurable | Fee tier, slippage, delay, rounds, amounts all via `.env` |
-| ⚡ RISE-native | Uses `testnet.riselabs.xyz` RPC, sub-second confirmations |
-| 🛡️ Safe | Slippage protection, auto-approval, deadline guard |
+Generates on-chain volume to earn XP and boost airdrop eligibility.
 
 ---
 
@@ -23,16 +13,31 @@ Generates swap + liquidity activity on **[Helios Trade](https://testnet.helios.t
 | **Network** | RISE Testnet |
 | **Chain ID** | `11155931` |
 | **RPC** | `https://testnet.riselabs.xyz` |
-| **Explorer** | `https://explorer.testnet.risechain.com` |
-| **Faucet** | `https://faucet.testnet.riselabs.xyz` |
-| **Portal** | `https://portal.risechain.com` |
-| **Helios DEX** | `https://testnet.helios.trade/swap` |
+| **Explorer** | `https://explorer.testnet.riselabs.xyz` |
+| **Faucet** | `https://portal.risechain.com` |
+| **DEX** | `https://testnet.helios.trade` |
+
+---
+
+## Contract Addresses
+
+| Contract | Address |
+|---|---|
+| V2 Factory | `0x9f653de29013b1e92f0c9749958961c3a64e676d` |
+| **V2 Router** | `0x10d48ce98bdf05be9dafa8d61f147a559c23ab85` |
+| V3 Factory | `0xb79fa267550c1bc6079ee5badeaa2b2fd52a2181` |
+| **V3 SwapRouter** | `0xdcc105b5aa8ed0a9e19907b7f606be94167f4e43` |
+| V3 QuoterV2 | `0x009c4554f445dfa2e757d9f0452dc7dcc444729a` |
+| **Position Manager** | `0x1b4d07bdfc807dfe4c32b13bc60d009e35b2749b` |
+| **WETH** | `0x4200000000000000000000000000000000000006` |
+| **USDR** (USD Rise, 6 dec) | `0x04ed985f0246f00e4e9d158a70a6469e258def05` |
+| WBTC (18 dec) | `0xf32d39ff9f6aa7a7a64d7a4f00a54826ef791a55` |
 
 ---
 
 ## Quick Start
 
-### 1. Install dependencies
+### 1. Install
 
 ```bash
 npm install
@@ -40,84 +45,56 @@ npm install
 
 ### 2. Get testnet ETH
 
-Go to the [RISE Testnet Faucet](https://portal.risechain.com) or [backup faucet](https://faucet.testnet.riselabs.xyz) and drip ETH to your wallet.
+Go to **https://portal.risechain.com**, enter your wallet address and drip ETH.
 
-### 3. Find the Helios contract addresses
-
-1. Go to [testnet.helios.trade/swap](https://testnet.helios.trade/swap)
-2. Connect your wallet and do a small manual swap
-3. Open the transaction in the [RISE Explorer](https://explorer.testnet.risechain.com)
-4. Note the **SwapRouter** contract address (the `to` address of your tx)
-5. For the **Position Manager**, go to the "Add Liquidity" tab on Helios and do the same
-
-### 4. Configure
+### 3. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in your `.env`:
+Open `.env` and set your private key — **everything else is already filled in**:
 
 ```env
 PRIVATE_KEY=0xYOUR_TESTNET_PRIVATE_KEY
-
-RPC_URL=https://testnet.riselabs.xyz
-
-SWAP_ROUTER=0xHeliosSwapRouterAddress
-POSITION_MANAGER=0xHeliosPositionManagerAddress
-
-WETH_ADDRESS=0xWETHOnRiseTestnet
-TOKEN_ADDRESS=0x50524C5bDa18aE25C600a8b81449B9CeAeB50471   # USDC
 ```
 
-> ⚠️ **Never use a real wallet. Testnet only.**
+> ⚠️ **Use a throwaway wallet. Never use a wallet with real funds.**
 
-### 5. Run
+### 4. Run
 
 ```bash
-# Swaps only (ETH wrap → buy → sell → unwrap, N rounds)
-npm run swap
-
-# Add liquidity only
-npm run liquidity
-
-# Swaps + add liquidity (default)
-npm run both
+npm run both       # swaps (V2 + V3) then add liquidity  ← recommended
+npm run swap       # swaps only
+npm run liquidity  # add liquidity only
 ```
-
----
-
-## Known Token Addresses on RISE Testnet
-
-| Token | Address |
-|---|---|
-| USDC | `0x50524C5bDa18aE25C600a8b81449B9CeAeB50471` |
-| USDT | `0x9190159b1bb78482Dca6EBaDf03ab744de0c0197` |
-| BTC  | `0xadDAEd879D549E5DBfaf3e35470C20D8C50fDed0` |
-
-*Source: [docs.risechain.com/docs/builders/testnet-tokens](https://docs.risechain.com/docs/builders/testnet-tokens)*
 
 ---
 
 ## How It Works
 
-### Swap Round
+### Swap Round (V2)
 ```
-ETH
- └─ wrap ──────────────────► WETH
- └─ exactInputSingle ──────► TOKEN
- └─ exactInputSingle ──────► WETH
- └─ unwrap ────────────────► ETH
+ETH ──[swapExactETHForTokens]──► USDR
+USDR ──[swapExactTokensForETH]──► ETH
 ```
-Each round = **2 on-chain swaps** (buy + sell).
 
-### Add Liquidity
+### Swap Round (V3)
 ```
-ETH
- └─ wrap ──────────────────► WETH (full amount)
- └─ exactInputSingle ──────► TOKEN (half WETH spent)
- └─ positionManager.mint ──► LP NFT (WETH + TOKEN paired)
+ETH ──[wrap]──► WETH
+WETH ──[exactInputSingle]──► USDR
+USDR ──[exactInputSingle]──► WETH
+WETH ──[unwrap]──► ETH
 ```
+
+### Add Liquidity (V3)
+```
+ETH ──[wrap]──► WETH (full amount)
+WETH/2 ──[exactInputSingle]──► USDR
+WETH + USDR ──[positionManager.mint]──► LP NFT
+```
+
+Set `SWAP_MODE=both` to **alternate V2 and V3 swaps** each round — this hits both routers and maximises on-chain footprint for XP.
 
 ---
 
@@ -125,18 +102,54 @@ ETH
 
 | Variable | Default | Description |
 |---|---|---|
-| `PRIVATE_KEY` | — | Wallet private key |
+| `PRIVATE_KEY` | — | Your testnet wallet private key |
 | `RPC_URL` | `https://testnet.riselabs.xyz` | RISE testnet RPC |
-| `SWAP_ROUTER` | — | Helios SwapRouter address |
-| `POSITION_MANAGER` | — | Helios PositionManager address |
-| `WETH_ADDRESS` | — | WETH token on RISE testnet |
-| `TOKEN_ADDRESS` | — | Token to swap (e.g. USDC) |
-| `POOL_FEE` | `3000` | 500 / 3000 / 10000 |
+| `SWAP_MODE` | `both` | `v2` \| `v3` \| `both` |
+| `POOL_FEE` | `3000` | V3 fee tier: `500` / `3000` / `10000` |
 | `SWAP_ROUNDS` | `10` | Number of buy+sell cycles |
 | `SWAP_AMOUNT_ETH` | `0.001` | ETH per round |
 | `DELAY_SECONDS` | `12` | Wait between rounds |
-| `SLIPPAGE_PERCENT` | `5` | Slippage tolerance |
-| `DEADLINE_OFFSET` | `300` | Tx deadline (seconds) |
+| `SLIPPAGE_PERCENT` | `5` | Slippage tolerance (%) |
+| `DEADLINE_OFFSET` | `300` | Tx deadline (seconds from now) |
+
+---
+
+## Example Output
+
+```
+[2025-05-28T10:00:00.000Z]  🚀  Helios Trade Volume Bot  [mode=both  swapEngine=both]
+[2025-05-28T10:00:00.000Z]      RPC     : https://testnet.riselabs.xyz
+[2025-05-28T10:00:01.000Z]      Network : unknown (chainId=11155931)
+[2025-05-28T10:00:01.000Z]      Wallet  : 0xABC...123
+[2025-05-28T10:00:01.000Z]      Balance : 0.1 ETH
+
+[2025-05-28T10:00:01.000Z]  📊  Running 10 swap rounds (0.001 ETH each | engine=both)
+
+[2025-05-28T10:00:01.000Z]  ── [V3] Swap round 1 ──────────────────────────────
+[2025-05-28T10:00:01.000Z]     ↳ Wrapping 0.001 ETH → WETH…
+[2025-05-28T10:00:02.000Z]     ↳ Wrapped ✓  tx=0xabc...
+[2025-05-28T10:00:02.000Z]  ▶  BUY  0.001 WETH → USDR
+[2025-05-28T10:00:03.000Z]     ✅ BUY  block=123456  tx=0xdef...
+[2025-05-28T10:00:06.000Z]  ▶  SELL 1.82 USDR → WETH
+[2025-05-28T10:00:07.000Z]     ✅ SELL block=123458  tx=0xghi...
+[2025-05-28T10:00:07.000Z]     ↳ Unwrapping 0.00099 WETH → ETH…
+```
+
+---
+
+## Subgraph APIs
+
+Track your volume on-chain via the AsterSwap subgraphs:
+
+| Version | URL |
+|---|---|
+| V2 | `https://testnet.helios.trade/subgraphs/name/asterswap-v2-rise` |
+| V3 | `https://testnet.helios.trade/subgraphs/name/asterswap-v3-rise` |
+
+Check your XP and points:
+```
+https://backend-amma.onrender.com/points/<YOUR_WALLET_ADDRESS>
+```
 
 ---
 
@@ -145,9 +158,9 @@ ETH
 ```
 monitoring-signal-alpha/
 ├── scripts/
-│   └── volumeBot.js      # Main bot (swap + liquidity)
-├── .env.example          # Config template
-├── .gitignore            # Keeps .env out of git
+│   └── volumeBot.js    # Main bot: V2 swaps, V3 swaps, V3 liquidity
+├── .env.example        # Config template (contracts pre-filled)
+├── .gitignore          # Keeps .env out of git
 ├── package.json
 └── README.md
 ```
@@ -156,6 +169,6 @@ monitoring-signal-alpha/
 
 ## Security
 
-- 🔑 `.env` is gitignored — never commit your private key
-- 🧪 Testnet wallets only — no real value at risk
-- ✅ `amountOutMinimum: 0n` is fine for testnet, increase it for prod use
+- 🔑 `.env` is gitignored — your private key never gets committed
+- 🧪 Testnet wallets only
+- ✅ All contract addresses sourced directly from the Helios Trade frontend
