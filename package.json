@@ -1,14 +1,14 @@
 {
-  "name": "helios-volume-bot",
-  "version": "2.0.0",
-  "description": "Testnet volume bot for Helios Trade (AsterSwap) on RISE Chain — swaps + liquidity",
+  "name": "helios-smart-volume-bot",
+  "version": "3.0.0",
+  "description": "Smart-analyst volume bot for Helios Trade (AsterSwap) on RISE Testnet",
   "main": "scripts/volumeBot.js",
   "type": "module",
   "scripts": {
-    "start":     "node scripts/volumeBot.js --mode both",
+    "start":     "node scripts/volumeBot.js --mode auto",
+    "auto":      "node scripts/volumeBot.js --mode auto",
     "swap":      "node scripts/volumeBot.js --mode swap",
-    "liquidity": "node scripts/volumeBot.js --mode liquidity",
-    "both":      "node scripts/volumeBot.js --mode both"
+    "liquidity": "node scripts/volumeBot.js --mode liquidity"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
