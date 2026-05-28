@@ -98,17 +98,33 @@ Set `SWAP_MODE=both` to **alternate V2 and V3 swaps** each round — this hits b
 
 ---
 
+## 🎲 Randomization
+
+Each round randomly picks:
+- 🪙 **Token** — from `RANDOM_TOKENS` list (e.g. USDR, WBTC)
+- 💰 **Amount** — between `MIN_*` and `MAX_*_AMOUNT_ETH`
+- ⏱️ **Delay** — between `MIN_DELAY_SECONDS` and `MAX_DELAY_SECONDS`
+- 🔀 **Engine** — V2 or V3 (50/50) when `SWAP_MODE=both`
+
+This makes the activity look organic and harder to filter out as bot traffic.
+
 ## Configuration Reference
 
 | Variable | Default | Description |
 |---|---|---|
 | `PRIVATE_KEY` | — | Your testnet wallet private key |
 | `RPC_URL` | `https://testnet.riselabs.xyz` | RISE testnet RPC |
-| `SWAP_MODE` | `both` | `v2` \| `v3` \| `both` |
+| `RANDOM_TOKENS` | `USDR,WBTC` | Tokens to randomly pick from |
+| `SWAP_MODE` | `both` | `v2` \| `v3` \| `both` (random per round) |
 | `POOL_FEE` | `3000` | V3 fee tier: `500` / `3000` / `10000` |
-| `SWAP_ROUNDS` | `10` | Number of buy+sell cycles |
-| `SWAP_AMOUNT_ETH` | `0.001` | ETH per round |
-| `DELAY_SECONDS` | `12` | Wait between rounds |
+| `SWAP_ROUNDS` | `10` | Number of swap cycles |
+| `LIQUIDITY_ROUNDS` | `3` | Number of LP-add cycles |
+| `MIN_SWAP_AMOUNT_ETH` | `0.0005` | Min random ETH per swap |
+| `MAX_SWAP_AMOUNT_ETH` | `0.003` | Max random ETH per swap |
+| `MIN_LP_AMOUNT_ETH` | `0.001` | Min random ETH per LP add |
+| `MAX_LP_AMOUNT_ETH` | `0.005` | Max random ETH per LP add |
+| `MIN_DELAY_SECONDS` | `8` | Min random wait between rounds |
+| `MAX_DELAY_SECONDS` | `25` | Max random wait between rounds |
 | `SLIPPAGE_PERCENT` | `5` | Slippage tolerance (%) |
 | `DEADLINE_OFFSET` | `300` | Tx deadline (seconds from now) |
 

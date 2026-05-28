@@ -6,9 +6,15 @@
  *  Explorer  : https://explorer.testnet.riselabs.xyz
  *  DEX       : testnet.helios.trade (AsterSwap)
  *
+ *  Features:
+ *    • Random token selection per round (USDR, WBTC, …)
+ *    • Random amount per round (within MIN/MAX bounds)
+ *    • V2 + V3 swap engines (alternates or fixed)
+ *    • V3 add liquidity with random tokens & amount
+ *
  *  Modes:
- *    node scripts/volumeBot.js --mode swap       # V2 + V3 swaps
- *    node scripts/volumeBot.js --mode liquidity  # add V3 liquidity
+ *    node scripts/volumeBot.js --mode swap       # randomized swaps
+ *    node scripts/volumeBot.js --mode liquidity  # randomized liquidity adds
  *    node scripts/volumeBot.js --mode both       # swaps then liquidity (default)
  * ═══════════════════════════════════════════════════════════
  */
@@ -24,14 +30,23 @@ const MODE    = modeIdx !== -1 ? args[modeIdx + 1] : "both";
 // ─── ENV ─────────────────────────────────────────────────────
 const {
   PRIVATE_KEY,
-  RPC_URL          = "https://testnet.riselabs.xyz",
-  SWAP_MODE        = "v3",      // "v2" | "v3" | "both"
-  POOL_FEE         = "3000",    // 500 | 3000 | 10000
-  SWAP_ROUNDS      = "10",
-  SWAP_AMOUNT_ETH  = "0.001",
-  DELAY_SECONDS    = "12",
-  SLIPPAGE_PERCENT = "5",
-  DEADLINE_OFFSET  = "300",
+  RPC_URL              = "https://testnet.riselabs.xyz",
+  SWAP_MODE            = "both",   // "v2" | "v3" | "both"
+  POOL_FEE             = "3000",
+  SWAP_ROUNDS          = "10",
+  LIQUIDITY_ROUNDS     = "3",
+  // Random amount range (in ETH units)
+  MIN_SWAP_AMOUNT_ETH  = "0.0005",
+  MAX_SWAP_AMOUNT_ETH  = "0.003",
+  MIN_LP_AMOUNT_ETH    = "0.001",
+  MAX_LP_AMOUNT_ETH    = "0.005",
+  // Random delay range (in seconds)
+  MIN_DELAY_SECONDS    = "8",
+  MAX_DELAY_SECONDS    = "25",
+  // Tokens to randomize between (comma-separated)
+  RANDOM_TOKENS        = "USDR,WBTC",
+  SLIPPAGE_PERCENT     = "5",
+  DEADLINE_OFFSET      = "300",
 } = process.env;
 
 if (!PRIVATE_KEY) {
@@ -46,9 +61,24 @@ const CONTRACTS = {
   V3_QUOTER:        "0x009c4554f445dfa2e757d9f0452dc7dcc444729a",
   POSITION_MANAGER: "0x1b4d07bdfc807dfe4c32b13bc60d009e35b2749b",
   WETH:             "0x4200000000000000000000000000000000000006",
-  USDR:             "0x04ed985f0246f00e4e9d158a70a6469e258def05", // USD Rise (6 dec)
-  WBTC:             "0xf32d39ff9f6aa7a7a64d7a4f00a54826ef791a55", // Wrapped BTC (18 dec)
 };
+
+// ─── TOKEN REGISTRY (extend here to add more tokens) ─────────
+const TOKENS = {
+  USDR: { address: "0x04ed985f0246f00e4e9d158a70a6469e258def05", decimals: 6,  symbol: "USDR" },
+  WBTC: { address: "0xf32d39ff9f6aa7a7a64d7a4f00a54826ef791a55", decimals: 18, symbol: "WBTC" },
+};
+
+// Build pool list from RANDOM_TOKENS env
+const TOKEN_POOL = RANDOM_TOKENS.split(",")
+  .map((s) => s.trim().toUpperCase())
+  .filter((s) => TOKENS[s])
+  .map((s) => TOKENS[s]);
+
+if (TOKEN_POOL.length === 0) {
+  console.error("❌  RANDOM_TOKENS must contain at least one valid token (USDR, WBTC).");
+  process.exit(1);
+}
 
 // ─── ABIs ────────────────────────────────────────────────────
 const WETH_ABI = [
@@ -73,7 +103,6 @@ const V2_ROUTER_ABI = [
   "function getAmountsOut(uint amountIn, address[] calldata path) view returns (uint[] memory amounts)",
   "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) payable returns (uint[] memory amounts)",
   "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) returns (uint[] memory amounts)",
-  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) returns (uint[] memory amounts)",
 ];
 
 const V3_QUOTER_ABI = [
@@ -92,9 +121,6 @@ const V3_ROUTER_ABI = [
      uint256 deadline, uint256 amountIn, uint256 amountOutMinimum,
      uint160 sqrtPriceLimitX96) params
   ) payable returns (uint256 amountOut)`,
-  "function unwrapWETH9(uint256 amountMinimum, address recipient) payable",
-  "function sweepToken(address token, uint256 amountMinimum, address recipient) payable",
-  "function multicall(bytes[] calldata data) payable returns (bytes[] memory results)",
 ];
 
 const POSITION_MANAGER_ABI = [
@@ -105,18 +131,10 @@ const POSITION_MANAGER_ABI = [
      uint256 amount0Min, uint256 amount1Min,
      address recipient, uint256 deadline)
   ) payable returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)`,
-  `function collect(
-    (uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)
-  ) payable returns (uint256 amount0, uint256 amount1)`,
-  `function decreaseLiquidity(
-    (uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline)
-  ) payable returns (uint256 amount0, uint256 amount1)`,
-  "function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
-  "function refundETH() payable",
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────
-const sleep   = (s) => new Promise((r) => setTimeout(r, s * 1000));
+const sleep    = (s) => new Promise((r) => setTimeout(r, s * 1000));
 const deadline = () => Math.floor(Date.now() / 1000) + Number(DEADLINE_OFFSET);
 const slippage = (amt, pct) => (amt * BigInt(100 - Number(pct))) / 100n;
 
@@ -124,6 +142,38 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}]  ${msg}`);
 }
 
+// ─── Randomization helpers ────────────────────────────────────
+function randFloat(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function randInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function pickRandomToken() {
+  return TOKEN_POOL[Math.floor(Math.random() * TOKEN_POOL.length)];
+}
+
+function randomAmountWei(minEth, maxEth) {
+  const amt   = randFloat(Number(minEth), Number(maxEth));
+  // Round to 6 decimals to keep numbers clean in logs
+  const fixed = amt.toFixed(6);
+  return ethers.parseEther(fixed);
+}
+
+function randomDelay() {
+  return randInt(Number(MIN_DELAY_SECONDS), Number(MAX_DELAY_SECONDS));
+}
+
+function pickEngine(round) {
+  if (SWAP_MODE === "v2") return "v2";
+  if (SWAP_MODE === "v3") return "v3";
+  // "both" → 50/50 random
+  return Math.random() < 0.5 ? "v2" : "v3";
+}
+
+// ─── Approval / wrap helpers ──────────────────────────────────
 async function ensureApproval(token, spender, amount) {
   const owner     = await token.runner.getAddress();
   const allowance = await token.allowance(owner, spender);
@@ -151,18 +201,20 @@ async function unwrapWETH(weth, amountWei) {
 }
 
 // ─── V2 SWAP ROUND ───────────────────────────────────────────
-// ETH → USDR → ETH  (uses V2 router, simplest path)
-async function v2SwapRound(v2Router, weth, usdr, wallet, amountWei, round) {
-  log(`── [V2] Swap round ${round} ──────────────────────────────`);
+async function v2SwapRound(v2Router, weth, tokenInfo, tokenContract, wallet, amountWei, round) {
+  log(`── [V2] Round ${round}  ETH ⇄ ${tokenInfo.symbol}  amount=${ethers.formatEther(amountWei)} ETH`);
 
-  const path_buy  = [CONTRACTS.WETH, CONTRACTS.USDR];
-  const path_sell = [CONTRACTS.USDR, CONTRACTS.WETH];
+  const path_buy  = [CONTRACTS.WETH, tokenInfo.address];
+  const path_sell = [tokenInfo.address, CONTRACTS.WETH];
 
-  // ── BUY: ETH → USDR ────────────────────────────────────────
-  log(`▶  BUY  ${ethers.formatEther(amountWei)} ETH → USDR`);
-  const amountsOut = await v2Router.getAmountsOut(amountWei, path_buy);
-  const minOut     = slippage(amountsOut[1], SLIPPAGE_PERCENT);
+  // BUY: ETH → TOKEN
+  let minOut = 0n;
+  try {
+    const amountsOut = await v2Router.getAmountsOut(amountWei, path_buy);
+    minOut = slippage(amountsOut[1], SLIPPAGE_PERCENT);
+  } catch (_) { /* no V2 pool may exist for some pairs */ }
 
+  log(`▶  BUY  ${ethers.formatEther(amountWei)} ETH → ${tokenInfo.symbol}`);
   const buyTx = await v2Router.swapExactETHForTokens(
     minOut, path_buy, wallet.address, deadline(), { value: amountWei }
   );
@@ -171,56 +223,52 @@ async function v2SwapRound(v2Router, weth, usdr, wallet, amountWei, round) {
 
   await sleep(3);
 
-  // ── SELL: USDR → ETH ───────────────────────────────────────
-  const usdrBal = await usdr.balanceOf(wallet.address);
-  if (usdrBal === 0n) { log("   ⚠️  USDR balance 0, skip sell."); return; }
+  // SELL: TOKEN → ETH
+  const tokenBal = await tokenContract.balanceOf(wallet.address);
+  if (tokenBal === 0n) { log("   ⚠️  Balance 0, skip sell."); return; }
 
-  await ensureApproval(usdr, CONTRACTS.V2_ROUTER, usdrBal);
+  await ensureApproval(tokenContract, CONTRACTS.V2_ROUTER, tokenBal);
 
-  const sellAmounts = await v2Router.getAmountsOut(usdrBal, path_sell);
-  const minEthOut   = slippage(sellAmounts[1], SLIPPAGE_PERCENT);
+  let minEth = 0n;
+  try {
+    const sellAmounts = await v2Router.getAmountsOut(tokenBal, path_sell);
+    minEth = slippage(sellAmounts[1], SLIPPAGE_PERCENT);
+  } catch (_) {}
 
-  const usdrDec = await usdr.decimals().catch(() => 6);
-  log(`▶  SELL ${ethers.formatUnits(usdrBal, usdrDec)} USDR → ETH`);
-
+  log(`▶  SELL ${ethers.formatUnits(tokenBal, tokenInfo.decimals)} ${tokenInfo.symbol} → ETH`);
   const sellTx = await v2Router.swapExactTokensForETH(
-    usdrBal, minEthOut, path_sell, wallet.address, deadline()
+    tokenBal, minEth, path_sell, wallet.address, deadline()
   );
   const sellR = await sellTx.wait();
   log(`   ✅ SELL block=${sellR.blockNumber}  tx=${sellTx.hash}`);
 }
 
 // ─── V3 SWAP ROUND ───────────────────────────────────────────
-// ETH → wrap → WETH → USDR (exactInputSingle) → WETH (exactInputSingle) → unwrap → ETH
-async function v3SwapRound(v3Router, v3Quoter, weth, usdr, wallet, amountWei, round) {
-  log(`── [V3] Swap round ${round} ──────────────────────────────`);
+async function v3SwapRound(v3Router, v3Quoter, weth, tokenInfo, tokenContract, wallet, amountWei, round) {
+  log(`── [V3] Round ${round}  ETH ⇄ ${tokenInfo.symbol}  amount=${ethers.formatEther(amountWei)} ETH  fee=${POOL_FEE}`);
 
   const fee = Number(POOL_FEE);
 
-  // 1. Wrap ETH → WETH
   await wrapETH(weth, amountWei);
   await ensureApproval(weth, CONTRACTS.V3_SWAP_ROUTER, amountWei);
 
-  // 2. BUY: WETH → USDR
-  log(`▶  BUY  ${ethers.formatEther(amountWei)} WETH → USDR`);
-
+  // BUY: WETH → TOKEN
   let quotedOut = 0n;
   try {
     quotedOut = await v3Quoter.quoteExactInputSingle.staticCall(
-      CONTRACTS.WETH, CONTRACTS.USDR, fee, amountWei, 0n
+      CONTRACTS.WETH, tokenInfo.address, fee, amountWei, 0n
     );
-  } catch (_) { /* quoter optional – proceed with 0 min */ }
+  } catch (_) {}
 
-  const minUsdr = quotedOut > 0n ? slippage(quotedOut, SLIPPAGE_PERCENT) : 0n;
-
+  log(`▶  BUY  ${ethers.formatEther(amountWei)} WETH → ${tokenInfo.symbol}`);
   const buyTx = await v3Router.exactInputSingle({
     tokenIn:           CONTRACTS.WETH,
-    tokenOut:          CONTRACTS.USDR,
+    tokenOut:          tokenInfo.address,
     fee,
     recipient:         wallet.address,
     deadline:          deadline(),
     amountIn:          amountWei,
-    amountOutMinimum:  minUsdr,
+    amountOutMinimum:  quotedOut > 0n ? slippage(quotedOut, SLIPPAGE_PERCENT) : 0n,
     sqrtPriceLimitX96: 0n,
   });
   const buyR = await buyTx.wait();
@@ -228,60 +276,54 @@ async function v3SwapRound(v3Router, v3Quoter, weth, usdr, wallet, amountWei, ro
 
   await sleep(3);
 
-  // 3. SELL: USDR → WETH
-  const usdrBal = await usdr.balanceOf(wallet.address);
-  if (usdrBal === 0n) { log("   ⚠️  USDR balance 0, skip sell."); return; }
+  // SELL: TOKEN → WETH
+  const tokenBal = await tokenContract.balanceOf(wallet.address);
+  if (tokenBal === 0n) { log("   ⚠️  Balance 0, skip sell."); return; }
 
-  await ensureApproval(usdr, CONTRACTS.V3_SWAP_ROUTER, usdrBal);
-
-  const usdrDec = await usdr.decimals().catch(() => 6);
-  log(`▶  SELL ${ethers.formatUnits(usdrBal, usdrDec)} USDR → WETH`);
+  await ensureApproval(tokenContract, CONTRACTS.V3_SWAP_ROUTER, tokenBal);
 
   let quotedWeth = 0n;
   try {
     quotedWeth = await v3Quoter.quoteExactInputSingle.staticCall(
-      CONTRACTS.USDR, CONTRACTS.WETH, fee, usdrBal, 0n
+      tokenInfo.address, CONTRACTS.WETH, fee, tokenBal, 0n
     );
   } catch (_) {}
 
-  const minWeth = quotedWeth > 0n ? slippage(quotedWeth, SLIPPAGE_PERCENT) : 0n;
-
+  log(`▶  SELL ${ethers.formatUnits(tokenBal, tokenInfo.decimals)} ${tokenInfo.symbol} → WETH`);
   const sellTx = await v3Router.exactInputSingle({
-    tokenIn:           CONTRACTS.USDR,
+    tokenIn:           tokenInfo.address,
     tokenOut:          CONTRACTS.WETH,
     fee,
     recipient:         wallet.address,
     deadline:          deadline(),
-    amountIn:          usdrBal,
-    amountOutMinimum:  minWeth,
+    amountIn:          tokenBal,
+    amountOutMinimum:  quotedWeth > 0n ? slippage(quotedWeth, SLIPPAGE_PERCENT) : 0n,
     sqrtPriceLimitX96: 0n,
   });
   const sellR = await sellTx.wait();
   log(`   ✅ SELL block=${sellR.blockNumber}  tx=${sellTx.hash}`);
 
-  // 4. Unwrap WETH → ETH
+  // Unwrap any leftover WETH
   const wethBal = await weth.balanceOf(wallet.address);
   if (wethBal > 0n) await unwrapWETH(weth, wethBal);
 }
 
 // ─── ADD V3 LIQUIDITY ─────────────────────────────────────────
-// Wrap ETH → buy USDR with half → mint WETH/USDR LP position
-async function addLiquidityV3(v3Router, posManager, v3Quoter, weth, usdr, wallet, amountWei) {
-  log(`── [V3] Add Liquidity ────────────────────────────────────`);
+async function addLiquidityV3(v3Router, posManager, weth, tokenInfo, tokenContract, wallet, amountWei, round) {
+  log(`── [LP ${round}]  WETH/${tokenInfo.symbol}  amount=${ethers.formatEther(amountWei)} ETH`);
 
   const fee     = Number(POOL_FEE);
   const halfEth = amountWei / 2n;
 
-  // 1. Wrap all ETH
   await wrapETH(weth, amountWei);
 
-  // 2. Buy USDR with half the WETH
+  // Buy token with half the WETH
   await ensureApproval(weth, CONTRACTS.V3_SWAP_ROUTER, halfEth);
-  log(`▶  Buying USDR with ${ethers.formatEther(halfEth)} WETH…`);
+  log(`▶  Buying ${tokenInfo.symbol} with ${ethers.formatEther(halfEth)} WETH…`);
 
   const buyTx = await v3Router.exactInputSingle({
     tokenIn:           CONTRACTS.WETH,
-    tokenOut:          CONTRACTS.USDR,
+    tokenOut:          tokenInfo.address,
     fee,
     recipient:         wallet.address,
     deadline:          deadline(),
@@ -292,44 +334,40 @@ async function addLiquidityV3(v3Router, posManager, v3Quoter, weth, usdr, wallet
   await buyTx.wait();
   log(`   ✅ Buy tx=${buyTx.hash}`);
 
-  const usdrBal = await usdr.balanceOf(wallet.address);
-  const wethBal = await weth.balanceOf(wallet.address);
+  const tokenBal = await tokenContract.balanceOf(wallet.address);
+  const wethBal  = await weth.balanceOf(wallet.address);
 
-  if (usdrBal === 0n || wethBal === 0n) {
-    log("   ⚠️  Insufficient balances for LP. Skipping.");
+  if (tokenBal === 0n || wethBal === 0n) {
+    log("   ⚠️  Insufficient balances for LP. Skip.");
     return;
   }
 
-  // 3. Approve both tokens for position manager
-  await ensureApproval(weth, CONTRACTS.POSITION_MANAGER, wethBal);
-  await ensureApproval(usdr, CONTRACTS.POSITION_MANAGER, usdrBal);
+  await ensureApproval(weth,          CONTRACTS.POSITION_MANAGER, wethBal);
+  await ensureApproval(tokenContract, CONTRACTS.POSITION_MANAGER, tokenBal);
 
-  // 4. Sort token order (V3 requires token0 < token1 by address)
-  const wethLower = CONTRACTS.WETH.toLowerCase() < CONTRACTS.USDR.toLowerCase();
+  // Sort tokens (V3 requires token0 < token1)
+  const wethLower = CONTRACTS.WETH.toLowerCase() < tokenInfo.address.toLowerCase();
   const [token0, token1, amt0, amt1] = wethLower
-    ? [CONTRACTS.WETH, CONTRACTS.USDR, wethBal, usdrBal]
-    : [CONTRACTS.USDR, CONTRACTS.WETH, usdrBal, wethBal];
+    ? [CONTRACTS.WETH, tokenInfo.address, wethBal, tokenBal]
+    : [tokenInfo.address, CONTRACTS.WETH, tokenBal, wethBal];
 
-  // 5. Tick range — full range (max) for testnet simplicity
-  //    tick spacing for 0.3% fee = 60 → nearest valid multiple of 60 ≤ 887220
   const TICK_LOWER = -887220;
   const TICK_UPPER =  887220;
 
-  const usdrDec = await usdr.decimals().catch(() => 6);
-  log(`▶  Minting LP: ${ethers.formatEther(wethBal)} WETH + ${ethers.formatUnits(usdrBal, usdrDec)} USDR`);
+  log(`▶  Mint LP: ${ethers.formatEther(wethBal)} WETH + ${ethers.formatUnits(tokenBal, tokenInfo.decimals)} ${tokenInfo.symbol}`);
 
   const mintTx = await posManager.mint({
     token0,
     token1,
     fee,
-    tickLower:       TICK_LOWER,
-    tickUpper:       TICK_UPPER,
-    amount0Desired:  amt0,
-    amount1Desired:  amt1,
-    amount0Min:      slippage(amt0, SLIPPAGE_PERCENT),
-    amount1Min:      slippage(amt1, SLIPPAGE_PERCENT),
-    recipient:       wallet.address,
-    deadline:        deadline(),
+    tickLower:      TICK_LOWER,
+    tickUpper:      TICK_UPPER,
+    amount0Desired: amt0,
+    amount1Desired: amt1,
+    amount0Min:     slippage(amt0, SLIPPAGE_PERCENT),
+    amount1Min:     slippage(amt1, SLIPPAGE_PERCENT),
+    recipient:      wallet.address,
+    deadline:       deadline(),
   });
   const mintR = await mintTx.wait();
   log(`   ✅ LP minted  block=${mintR.blockNumber}  tx=${mintTx.hash}`);
@@ -338,76 +376,95 @@ async function addLiquidityV3(v3Router, posManager, v3Quoter, weth, usdr, wallet
 // ─── MAIN ─────────────────────────────────────────────────────
 async function main() {
   log(`🚀  Helios Trade Volume Bot  [mode=${MODE}  swapEngine=${SWAP_MODE}]`);
-  log(`    RPC     : ${RPC_URL}`);
+  log(`    RPC      : ${RPC_URL}`);
+  log(`    Tokens   : ${TOKEN_POOL.map((t) => t.symbol).join(", ")}`);
+  log(`    Swap amt : ${MIN_SWAP_AMOUNT_ETH} – ${MAX_SWAP_AMOUNT_ETH} ETH (random)`);
+  log(`    LP   amt : ${MIN_LP_AMOUNT_ETH} – ${MAX_LP_AMOUNT_ETH} ETH (random)`);
+  log(`    Delay    : ${MIN_DELAY_SECONDS} – ${MAX_DELAY_SECONDS} s (random)`);
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
   const wallet   = new ethers.Wallet(PRIVATE_KEY, provider);
   const network  = await provider.getNetwork();
   const balance  = await provider.getBalance(wallet.address);
 
-  log(`    Network : ${network.name} (chainId=${network.chainId})`);
-  log(`    Wallet  : ${wallet.address}`);
-  log(`    Balance : ${ethers.formatEther(balance)} ETH`);
+  log(`    Network  : chainId=${network.chainId}`);
+  log(`    Wallet   : ${wallet.address}`);
+  log(`    Balance  : ${ethers.formatEther(balance)} ETH`);
 
   if (network.chainId !== 11155931n) {
     log(`    ⚠️  Expected RISE Testnet (11155931), got ${network.chainId}`);
   }
 
-  // ── Contract instances ───────────────────────────────────
-  const v2Router   = new ethers.Contract(CONTRACTS.V2_ROUTER,        V2_ROUTER_ABI,          wallet);
-  const v3Router   = new ethers.Contract(CONTRACTS.V3_SWAP_ROUTER,   V3_ROUTER_ABI,          wallet);
-  const v3Quoter   = new ethers.Contract(CONTRACTS.V3_QUOTER,        V3_QUOTER_ABI,          wallet);
-  const posManager = new ethers.Contract(CONTRACTS.POSITION_MANAGER, POSITION_MANAGER_ABI,   wallet);
-  const weth       = new ethers.Contract(CONTRACTS.WETH,             WETH_ABI,               wallet);
-  const usdr       = new ethers.Contract(CONTRACTS.USDR,             ERC20_ABI,              wallet);
+  // Contract instances
+  const v2Router   = new ethers.Contract(CONTRACTS.V2_ROUTER,        V2_ROUTER_ABI,        wallet);
+  const v3Router   = new ethers.Contract(CONTRACTS.V3_SWAP_ROUTER,   V3_ROUTER_ABI,        wallet);
+  const v3Quoter   = new ethers.Contract(CONTRACTS.V3_QUOTER,        V3_QUOTER_ABI,        wallet);
+  const posManager = new ethers.Contract(CONTRACTS.POSITION_MANAGER, POSITION_MANAGER_ABI, wallet);
+  const weth       = new ethers.Contract(CONTRACTS.WETH,             WETH_ABI,             wallet);
 
-  const swapWei  = ethers.parseEther(SWAP_AMOUNT_ETH);
-  const rounds   = Number(SWAP_ROUNDS);
-  const delaySec = Number(DELAY_SECONDS);
+  // Pre-build token contract instances
+  const tokenContracts = {};
+  for (const sym of Object.keys(TOKENS)) {
+    tokenContracts[sym] = new ethers.Contract(TOKENS[sym].address, ERC20_ABI, wallet);
+  }
 
-  // ── SWAP ROUNDS ──────────────────────────────────────────
+  // ── SWAP ROUNDS ───────────────────────────────────────────
   if (MODE === "swap" || MODE === "both") {
-    log(`\n📊  Running ${rounds} swap rounds (${SWAP_AMOUNT_ETH} ETH each | engine=${SWAP_MODE})\n`);
+    const rounds = Number(SWAP_ROUNDS);
+    log(`\n📊  Running ${rounds} randomized swap rounds\n`);
 
     for (let i = 1; i <= rounds; i++) {
+      const tokenInfo     = pickRandomToken();
+      const tokenContract = tokenContracts[tokenInfo.symbol];
+      const amountWei     = randomAmountWei(MIN_SWAP_AMOUNT_ETH, MAX_SWAP_AMOUNT_ETH);
+      const engine        = pickEngine(i);
+
       try {
-        if (SWAP_MODE === "v2") {
-          await v2SwapRound(v2Router, weth, usdr, wallet, swapWei, i);
-        } else if (SWAP_MODE === "v3") {
-          await v3SwapRound(v3Router, v3Quoter, weth, usdr, wallet, swapWei, i);
+        if (engine === "v2") {
+          await v2SwapRound(v2Router, weth, tokenInfo, tokenContract, wallet, amountWei, i);
         } else {
-          // "both" — alternate V2 and V3 each round for max coverage
-          if (i % 2 === 0) {
-            await v2SwapRound(v2Router, weth, usdr, wallet, swapWei, i);
-          } else {
-            await v3SwapRound(v3Router, v3Quoter, weth, usdr, wallet, swapWei, i);
-          }
+          await v3SwapRound(v3Router, v3Quoter, weth, tokenInfo, tokenContract, wallet, amountWei, i);
         }
       } catch (err) {
         log(`   ❌ Round ${i} failed: ${err.shortMessage ?? err.message}`);
       }
 
       if (i < rounds) {
-        log(`   ⏳ Waiting ${delaySec}s…\n`);
-        await sleep(delaySec);
+        const d = randomDelay();
+        log(`   ⏳ Sleeping ${d}s…\n`);
+        await sleep(d);
       }
     }
 
     log(`\n✅  Swap rounds complete.\n`);
   }
 
-  // ── ADD LIQUIDITY ────────────────────────────────────────
+  // ── LIQUIDITY ROUNDS ──────────────────────────────────────
   if (MODE === "liquidity" || MODE === "both") {
-    log(`\n💧  Adding V3 liquidity (${SWAP_AMOUNT_ETH} ETH)\n`);
-    try {
-      await addLiquidityV3(v3Router, posManager, v3Quoter, weth, usdr, wallet, swapWei);
-    } catch (err) {
-      log(`   ❌ Liquidity failed: ${err.shortMessage ?? err.message}`);
+    const lpRounds = Number(LIQUIDITY_ROUNDS);
+    log(`\n💧  Running ${lpRounds} randomized liquidity rounds\n`);
+
+    for (let i = 1; i <= lpRounds; i++) {
+      const tokenInfo     = pickRandomToken();
+      const tokenContract = tokenContracts[tokenInfo.symbol];
+      const amountWei     = randomAmountWei(MIN_LP_AMOUNT_ETH, MAX_LP_AMOUNT_ETH);
+
+      try {
+        await addLiquidityV3(v3Router, posManager, weth, tokenInfo, tokenContract, wallet, amountWei, i);
+      } catch (err) {
+        log(`   ❌ LP round ${i} failed: ${err.shortMessage ?? err.message}`);
+      }
+
+      if (i < lpRounds) {
+        const d = randomDelay();
+        log(`   ⏳ Sleeping ${d}s…\n`);
+        await sleep(d);
+      }
     }
-    log(`\n✅  Liquidity round complete.\n`);
+
+    log(`\n✅  Liquidity rounds complete.\n`);
   }
 
-  // ── Final balance ────────────────────────────────────────
   const finalBal = await provider.getBalance(wallet.address);
   log(`🏁  Done. Final balance: ${ethers.formatEther(finalBal)} ETH`);
 }
